@@ -1,0 +1,759 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="application-name" content="Lens Dash">
+<meta name="description" content="Speed, heading, weather, time and arrival for a drive, in one glance.">
+<meta name="theme-color" content="#000000">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%23000'/%3E%3Ccircle cx='32' cy='32' r='22' fill='none' stroke='%23f5f1e4' stroke-width='4'/%3E%3Cpath d='M32 14l7 20H25z' fill='%23ffb629'/%3E%3C/svg%3E">
+<title>Lens Dash</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@500;600&family=Barlow+Condensed:wght@500;600&display=swap">
+<style>
+  /* Layout: an instrument cluster for a 600 x 600 additive lens. Four small readouts sit in the
+     corners, the speed owns the middle, and everything else stays unlit so the road shows through.
+     Type is Barlow, drawn from highway signage. */
+  :root {
+    --unlit: #000000;
+    --lume: #f5f1e4;
+    --amber: #ffb629;
+    --dim: #aaa593;
+    --line: #6a6657;
+    --alert: #ff6a55;
+    --font-num: 'Barlow Condensed', 'Roboto Condensed', 'Arial Narrow', system-ui, sans-serif;
+    --font-text: 'Barlow', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    color-scheme: dark;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { inline-size: 100%; block-size: 100%; }
+  html { font-size: clamp(15px, 3.4vmin, 21px); }
+
+  body {
+    margin: 0;
+    min-inline-size: 0;
+    display: grid;
+    place-items: center;
+    background: var(--unlit);
+    color: var(--lume);
+    font-family: var(--font-text);
+    font-weight: 500;
+    font-size: 1rem;
+    line-height: 1.25;
+  }
+
+  .app {
+    inline-size: 100%;
+    block-size: 100%;
+    max-inline-size: 600px;
+    max-block-size: 600px;
+    display: grid;
+    padding-block: max(14px, 4vmin);
+    padding-inline: max(16px, 5vmin);
+    overflow: hidden;
+  }
+  .app > section { grid-area: 1 / 1; min-inline-size: 0; min-block-size: 0; }
+
+  .label {
+    display: block;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .value {
+    display: block;
+    font-family: var(--font-num);
+    font-weight: 600;
+    font-size: 2rem;
+    line-height: 1.05;
+    font-variant-numeric: tabular-nums;
+  }
+  .value small { font-size: 0.5em; font-weight: 500; color: var(--dim); margin-inline-start: 0.2em; }
+  .sub { display: block; font-size: 0.85rem; color: var(--dim); }
+
+  /* ---------- start ---------- */
+  .start { display: grid; align-content: center; gap: 1rem; }
+  .start h1 {
+    margin: 0;
+    font-family: var(--font-num);
+    font-weight: 600;
+    font-size: 2.8rem;
+    line-height: 1;
+    text-wrap: balance;
+  }
+  .start p { margin: 0; max-inline-size: 30em; }
+  .start .fine { font-size: 0.85rem; color: var(--dim); }
+  .stack { display: grid; gap: 0.6rem; }
+
+  .btn, .place, .field {
+    appearance: none;
+    inline-size: 100%;
+    min-inline-size: 0;
+    padding: 0.6em 0.8em;
+    border: 2px solid var(--line);
+    border-radius: 0.6rem;
+    background: var(--unlit);
+    color: var(--lume);
+    font: 600 1.05rem/1.2 var(--font-text);
+    text-align: start;
+  }
+  .btn, .place { cursor: pointer; }
+  .btn.main { border-color: var(--amber); }
+  .btn:hover, .place:hover { border-color: var(--lume); }
+  :where(button, input):focus-visible { outline: 3px solid var(--amber); outline-offset: 3px; }
+  .place span { display: block; font-size: 0.82rem; font-weight: 500; color: var(--dim); }
+  .field::placeholder { color: var(--dim); }
+  .msg { margin: 0; min-block-size: 1.25em; color: var(--amber); font-size: 0.9rem; }
+
+  /* ---------- drive ---------- */
+  .hud {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-areas: "wx compass" "speed speed" "eta clock";
+    gap: 0.5rem 1rem;
+  }
+
+  .wx { grid-area: wx; display: flex; align-items: center; gap: 0.6rem; min-inline-size: 0; }
+  .wx svg { flex: none; inline-size: 2.6rem; block-size: 2.6rem; }
+  .wx svg * { fill: none; stroke: var(--lume); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .wx div { min-inline-size: 0; }
+
+  .compass {
+    grid-area: compass;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.6rem;
+    text-align: end;
+    min-inline-size: 0;
+  }
+  .compass svg { flex: none; inline-size: 5rem; block-size: 5rem; overflow: visible; }
+  #card { transition: transform 0.35s ease-out; }
+  .ring { fill: none; stroke: var(--line); stroke-width: 1.5; }
+  .tick { stroke: var(--dim); stroke-width: 1.5; stroke-linecap: round; }
+  .tick.big { stroke: var(--lume); stroke-width: 2; }
+  .pt { fill: var(--lume); font: 600 13px var(--font-num); text-anchor: middle; dominant-baseline: central; }
+  .pt.north { fill: var(--amber); }
+  .lubber { fill: var(--amber); }
+  .compass[data-live="false"] .value, .compass[data-live="false"] svg { opacity: 0.55; }
+
+  .speed { grid-area: speed; place-self: center; text-align: center; min-inline-size: 0; }
+  #spd {
+    display: block;
+    font-family: var(--font-num);
+    font-weight: 600;
+    font-size: clamp(96px, 36vmin, 216px);
+    line-height: 0.82;
+    font-variant-numeric: tabular-nums;
+  }
+  .speed[data-live="false"] #spd { color: var(--dim); font-size: clamp(48px, 16vmin, 96px); line-height: 1.5; letter-spacing: 0.1em; }
+  .unit {
+    display: block;
+    margin-block-start: 0.5rem;
+    font-size: 0.95rem;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--dim);
+  }
+  .note { margin: 0.3rem 0 0; min-block-size: 1.25em; font-size: 0.9rem; color: var(--amber); }
+
+  .eta {
+    grid-area: eta;
+    align-self: end;
+    justify-self: start;
+    max-inline-size: 100%;
+    min-inline-size: 0;
+    padding: 0.45rem 0.7rem;
+    border: 1.5px solid var(--line);
+    border-radius: 0.6rem;
+    background: var(--unlit);
+    color: var(--lume);
+    font: inherit;
+    text-align: start;
+    cursor: pointer;
+  }
+  .eta .value.words { font-size: 1.35rem; }
+
+  .clock { grid-area: clock; align-self: end; justify-self: end; text-align: end; }
+
+  /* ---------- trip ---------- */
+  .trip { display: grid; align-content: start; gap: 0.6rem; overflow-y: auto; padding: 4px; }
+  .trip h1, .trip h2 { margin: 0; font-family: var(--font-num); font-weight: 600; line-height: 1.1; }
+  .trip h1 { font-size: 1.7rem; }
+  .trip h2 { margin-block-start: 0.4rem; font-size: 0.72rem; font-family: var(--font-text); letter-spacing: 0.1em; text-transform: uppercase; color: var(--dim); }
+  .trip label { font-size: 0.9rem; color: var(--dim); }
+  .list { display: grid; gap: 0.5rem; }
+
+  @media (prefers-reduced-motion: reduce) { #card { transition: none; } }
+</style>
+
+<main class="app" id="app">
+  <section class="start" id="start">
+    <h1>Lens Dash</h1>
+    <p>Speed, heading, weather, time and arrival in one glance.</p>
+    <p class="msg" id="startMsg" aria-live="polite"></p>
+    <div class="stack">
+      <button type="button" class="btn main" id="btnStart">Start drive</button>
+      <button type="button" class="btn" id="btnDemo">Show a demo</button>
+    </div>
+    <p class="fine">Set your destination before you move. Glance, don't stare.</p>
+  </section>
+
+  <section class="hud" id="hud" hidden>
+    <div class="wx" id="wx">
+      <svg id="wxIcon" viewBox="0 0 32 32" aria-hidden="true"></svg>
+      <div>
+        <span class="value" id="wxTemp">–</span>
+        <span class="sub" id="wxText">Weather</span>
+      </div>
+    </div>
+
+    <div class="compass" id="compass" data-live="false">
+      <div>
+        <span class="value" id="hdgCard">–</span>
+        <span class="sub" id="hdgDeg">Heading</span>
+      </div>
+      <svg viewBox="-50 -50 100 100" aria-hidden="true">
+        <g id="card"><circle class="ring" r="38"></circle></g>
+        <path class="lubber" d="M0 -41 L6 -50 L-6 -50 Z"></path>
+      </svg>
+    </div>
+
+    <div class="speed" id="speed" data-live="false">
+      <span id="spd" aria-live="off">--</span>
+      <span class="unit" id="spdUnit">mph</span>
+      <p class="note" id="note" aria-live="polite"></p>
+    </div>
+
+    <button type="button" class="eta" id="etaBtn">
+      <span class="label" id="etaLabel">Trip</span>
+      <span class="value words" id="etaValue">Set destination</span>
+      <span class="sub" id="etaSub"></span>
+    </button>
+
+    <div class="clock">
+      <span class="label" id="clockDay">Today</span>
+      <span class="value" id="clock">–</span>
+    </div>
+  </section>
+
+  <section class="trip" id="trip" hidden>
+    <h1>Trip</h1>
+    <label for="dest">Where to?</label>
+    <input class="field" id="dest" type="search" placeholder="Write or say a place" autocomplete="off">
+    <button type="button" class="btn main" id="btnFind">Search</button>
+    <p class="msg" id="tripMsg" aria-live="polite"></p>
+    <div class="list" id="results"></div>
+    <h2 id="recentsHead" hidden>Recent</h2>
+    <div class="list" id="recents"></div>
+    <h2>Options</h2>
+    <div class="list">
+      <button type="button" class="btn" id="btnClear" hidden>End this trip</button>
+      <button type="button" class="btn" id="btnUnits">Units</button>
+      <button type="button" class="btn" id="btnBack">Back to drive</button>
+    </div>
+  </section>
+</main>
+
+<script>
+(() => {
+  'use strict';
+
+  /* ---------- helpers ---------- */
+  const KEY = 'lensdash.v1';
+  const $ = (id) => document.getElementById(id);
+  const finite = (v) => typeof v === 'number' && Number.isFinite(v);
+  const rad = (d) => (d * Math.PI) / 180;
+  const deg = (r) => (r * 180) / Math.PI;
+  const angDiff = (a, b) => ((a - b + 540) % 360) - 180;
+  const CARDINALS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+
+  function dist(a, b) {
+    const dLat = rad(b.lat - a.lat);
+    const dLon = rad(b.lon - a.lon);
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLon / 2) ** 2;
+    return 6371000 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+  }
+  function bearing(a, b) {
+    const y = Math.sin(rad(b.lon - a.lon)) * Math.cos(rad(b.lat));
+    const x = Math.cos(rad(a.lat)) * Math.sin(rad(b.lat)) - Math.sin(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.cos(rad(b.lon - a.lon));
+    return (deg(Math.atan2(y, x)) + 360) % 360;
+  }
+  function clockParts(d) {
+    let text = '';
+    try { text = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); } catch (err) { text = ''; }
+    const m = /^(\d{1,2}[:.]\d{2})\s*([AaPp]\.?\s?[Mm]\.?)?$/.exec(text.replace(/[  ]/g, ' ').trim());
+    if (m) return { hm: m[1], ap: m[2] ? m[2].replace(/[.\s]/g, '').toUpperCase() : '' };
+    return { hm: d.getHours() + ':' + String(d.getMinutes()).padStart(2, '0'), ap: '' };
+  }
+  function setTime(el, d, prefix) {
+    const p = clockParts(d);
+    el.textContent = (prefix || '') + p.hm;
+    if (p.ap) {
+      const sm = document.createElement('small');
+      sm.textContent = p.ap;
+      el.appendChild(sm);
+    }
+  }
+
+  /* ---------- saved settings ---------- */
+  function defaultUnits() {
+    const region = /[-_]([A-Za-z]{2})\b/.exec(navigator.language || '');
+    return !region || region[1].toUpperCase() === 'US' ? 'us' : 'metric';
+  }
+  const validPlace = (p) => p && typeof p.name === 'string' && finite(p.lat) && finite(p.lon);
+  function load() {
+    const d = { units: defaultUnits(), started: false, dest: null, recents: [] };
+    try {
+      const o = JSON.parse(localStorage.getItem(KEY) || 'null');
+      if (o && typeof o === 'object') {
+        if (o.units === 'us' || o.units === 'metric') d.units = o.units;
+        d.started = o.started === true;
+        if (validPlace(o.dest)) d.dest = o.dest;
+        if (Array.isArray(o.recents)) d.recents = o.recents.filter(validPlace).slice(0, 4);
+      }
+    } catch (err) { /* start with defaults */ }
+    return d;
+  }
+  const s = load();
+  function save() {
+    try { localStorage.setItem(KEY, JSON.stringify(s)); } catch (err) { /* settings just won't persist */ }
+  }
+
+  /* ---------- live values ---------- */
+  const DEMO_DEST = { name: 'Campus library', lat: 0, lon: 0 };
+  let demo = false;
+  let fix = null;
+  let fixAt = 0;
+  let prev = null;
+  let speed = null;
+  let course = null;
+  let courseAt = 0;
+  let sensorHeading = null;
+  let sensorAt = 0;
+  let geoState = 'idle';
+  let watchId = null;
+  let wx = null;
+  let wxAt = 0;
+  let wxPos = null;
+  let wxBusy = false;
+  let route = null;
+  let routeAt = 0;
+  let routeBusy = false;
+
+  /* ---------- speed ---------- */
+  function renderSpeed() {
+    const live = geoState === 'ok' && Date.now() - fixAt < 7000 && speed !== null;
+    $('speed').dataset.live = live ? 'true' : 'false';
+    $('spdUnit').textContent = s.units === 'us' ? 'mph' : 'km/h';
+    if (speed === null || !live) { $('spd').textContent = '--'; return; }
+    const v = speed * (s.units === 'us' ? 2.23694 : 3.6);
+    $('spd').textContent = String(v < 1 ? 0 : Math.round(v));
+  }
+  function renderNote() {
+    let text = '';
+    if (demo) text = 'Demo. Not your real speed.';
+    else if (geoState === 'denied') text = 'Location is off. Allow it for this app.';
+    else if (geoState === 'none') text = 'This device has no location.';
+    else if (geoState !== 'ok' || Date.now() - fixAt > 7000) text = 'Waiting for GPS';
+    if ($('note').textContent !== text) $('note').textContent = text;
+  }
+
+  /* ---------- compass ---------- */
+  const card = $('card');
+  (function buildCard() {
+    const NS = 'http://www.w3.org/2000/svg';
+    for (let a = 0; a < 360; a += 30) {
+      const big = a % 90 === 0;
+      const l = document.createElementNS(NS, 'line');
+      l.setAttribute('class', big ? 'tick big' : 'tick');
+      l.setAttribute('x1', 0); l.setAttribute('x2', 0);
+      l.setAttribute('y1', -38); l.setAttribute('y2', big ? -30 : -33);
+      l.setAttribute('transform', 'rotate(' + a + ')');
+      card.appendChild(l);
+    }
+    [['N', 0], ['E', 90], ['S', 180], ['W', 270]].forEach(([ch, a]) => {
+      const t = document.createElementNS(NS, 'text');
+      t.setAttribute('class', ch === 'N' ? 'pt north' : 'pt');
+      t.setAttribute('x', 0); t.setAttribute('y', -19);
+      t.setAttribute('transform', 'rotate(' + a + ')');
+      t.textContent = ch;
+      card.appendChild(t);
+    });
+  })();
+  let cardRot = 0;
+  function renderHeading() {
+    const now = Date.now();
+    let h = null;
+    let live = false;
+    if (course !== null && now - courseAt < 8000) { h = course; live = true; }
+    else if (sensorHeading !== null && now - sensorAt < 3000) { h = sensorHeading; live = true; }
+    else if (course !== null) { h = course; }
+    $('compass').dataset.live = live ? 'true' : 'false';
+    if (h === null) { $('hdgCard').textContent = '–'; $('hdgDeg').textContent = 'Heading'; return; }
+    $('hdgCard').textContent = CARDINALS[Math.round(h / 45) % 8];
+    $('hdgDeg').textContent = Math.round(h) % 360 + '°';
+    cardRot += angDiff(-h, cardRot);
+    card.style.transform = 'rotate(' + cardRot.toFixed(1) + 'deg)';
+  }
+  function onOrientation(e) {
+    let h = null;
+    if (finite(e.webkitCompassHeading)) h = e.webkitCompassHeading;
+    else if (e.absolute === true && finite(e.alpha)) h = (360 - e.alpha) % 360;
+    if (h === null) return;
+    sensorHeading = h;
+    sensorAt = Date.now();
+  }
+  let sensorsOn = false;
+  function attachSensors() {
+    if (sensorsOn) return;
+    sensorsOn = true;
+    window.addEventListener('ondeviceorientationabsolute' in window ? 'deviceorientationabsolute' : 'deviceorientation', onOrientation);
+  }
+  function askSensors() {
+    const O = window.DeviceOrientationEvent;
+    if (!O || sensorsOn) return;
+    if (typeof O.requestPermission !== 'function') { attachSensors(); return; }
+    O.requestPermission().then((state) => { if (state === 'granted') attachSensors(); }).catch(() => { /* GPS heading still works */ });
+  }
+
+  /* ---------- weather ---------- */
+  const ICONS = {
+    sun: '<circle cx="16" cy="16" r="5.5"/><path d="M16 4v3M16 25v3M4 16h3M25 16h3M7.5 7.5l2.1 2.1M22.4 22.4l2.1 2.1M7.5 24.5l2.1-2.1M22.4 9.6l2.1-2.1"/>',
+    moon: '<path d="M23 18.6A9.5 9.5 0 1 1 13.4 7a7.6 7.6 0 0 0 9.6 11.6z"/>',
+    cloud: '<path d="M9.5 24h13a5 5 0 0 0 .7-9.95A7 7 0 0 0 9.6 15.1 4.5 4.5 0 0 0 9.5 24z"/>',
+    partly: '<circle cx="11" cy="11" r="4"/><path d="M11 3.5v2M3.5 11h2M5.7 5.7l1.4 1.4M16.3 5.7l-1.4 1.4"/><path d="M12.5 26h10.5a4.5 4.5 0 0 0 .6-8.96A6.2 6.2 0 0 0 12.6 18 4 4 0 0 0 12.5 26z"/>',
+    rain: '<path d="M9.5 20h13a5 5 0 0 0 .7-9.95A7 7 0 0 0 9.6 11.1 4.5 4.5 0 0 0 9.5 20z"/><path d="M11 24l-1.2 3M16.5 24l-1.2 3M22 24l-1.2 3"/>',
+    snow: '<path d="M9.5 20h13a5 5 0 0 0 .7-9.95A7 7 0 0 0 9.6 11.1 4.5 4.5 0 0 0 9.5 20z"/><path d="M11 25v.1M16.5 27v.1M22 25v.1"/>',
+    fog: '<path d="M5 11h22M8 16h19M5 21h19M9 26h14"/>',
+    storm: '<path d="M9.5 19h13a5 5 0 0 0 .7-9.95A7 7 0 0 0 9.6 10.1 4.5 4.5 0 0 0 9.5 19z"/><path d="M17.5 20l-4 5h4l-2 4.5"/>',
+  };
+  function describe(code, day) {
+    if (code === 0) return [day ? 'sun' : 'moon', 'Clear'];
+    if (code === 1) return [day ? 'sun' : 'moon', 'Mostly clear'];
+    if (code === 2) return [day ? 'partly' : 'cloud', 'Partly cloudy'];
+    if (code === 3) return ['cloud', 'Overcast'];
+    if (code === 45 || code === 48) return ['fog', 'Fog'];
+    if (code >= 51 && code <= 57) return ['rain', 'Drizzle'];
+    if (code >= 61 && code <= 67) return ['rain', 'Rain'];
+    if (code >= 71 && code <= 77) return ['snow', 'Snow'];
+    if (code >= 80 && code <= 82) return ['rain', 'Showers'];
+    if (code === 85 || code === 86) return ['snow', 'Snow showers'];
+    if (code >= 95) return ['storm', 'Thunderstorm'];
+    return ['cloud', 'Weather'];
+  }
+  function renderWeather() {
+    if (!wx) { $('wxTemp').textContent = '–'; $('wxText').textContent = 'Weather'; $('wxIcon').innerHTML = ICONS.cloud; return; }
+    const t = s.units === 'us' ? wx.temp * 9 / 5 + 32 : wx.temp;
+    const [icon, words] = describe(wx.code, wx.day);
+    $('wxTemp').textContent = Math.round(t) + '°';
+    $('wxText').textContent = words;
+    $('wxIcon').innerHTML = ICONS[icon];
+  }
+  function maybeWeather() {
+    if (demo || !fix || wxBusy) return;
+    const now = Date.now();
+    if (wx && now - wxAt < 600000 && wxPos && dist(wxPos, fix) < 8000) return;
+    if (!wx && wxAt && now - wxAt < 30000) return;
+    wxBusy = true;
+    wxAt = now;
+    const at = { lat: fix.lat, lon: fix.lon };
+    fetch('https://api.open-meteo.com/v1/forecast?latitude=' + at.lat.toFixed(2) + '&longitude=' + at.lon.toFixed(2) + '&current=temperature_2m,weather_code,is_day')
+      .then((r) => { if (!r.ok) throw new Error('weather ' + r.status); return r.json(); })
+      .then((j) => {
+        const c = j && j.current;
+        if (c && finite(c.temperature_2m)) {
+          wx = { temp: c.temperature_2m, code: finite(c.weather_code) ? c.weather_code : -1, day: c.is_day !== 0 };
+          wxPos = at;
+        }
+      })
+      .catch(() => { /* keep the last reading; try again in 30 seconds */ })
+      .finally(() => { wxBusy = false; renderWeather(); });
+  }
+
+  /* ---------- arrival ---------- */
+  const fmtDist = (m) => {
+    if (s.units === 'us') { const mi = m / 1609.344; return (mi < 10 ? mi.toFixed(1) : Math.round(mi)) + ' mi'; }
+    const km = m / 1000;
+    return (km < 10 ? km.toFixed(1) : Math.round(km)) + ' km';
+  };
+  function renderEta() {
+    const dest = demo ? DEMO_DEST : s.dest;
+    const label = $('etaLabel');
+    const value = $('etaValue');
+    const sub = $('etaSub');
+    if (!dest) {
+      label.textContent = 'Trip'; value.textContent = 'Set destination'; value.className = 'value words'; sub.textContent = '';
+      return;
+    }
+    label.textContent = 'To ' + dest.name;
+    if (route && route.arrived) { value.textContent = 'Arrived'; value.className = 'value words'; sub.textContent = ''; return; }
+    if (!route) {
+      value.textContent = '…'; value.className = 'value';
+      sub.textContent = fix ? 'Finding the route' : 'Waiting for GPS';
+      return;
+    }
+    const arrive = route.at + route.dur * 1000;
+    const mins = Math.max(0, Math.round((arrive - Date.now()) / 60000));
+    value.className = 'value';
+    setTime(value, new Date(arrive), route.approx ? '≈ ' : '');
+    sub.textContent = (mins >= 60 ? Math.floor(mins / 60) + ' h ' + (mins % 60) + ' min' : mins + ' min') + ' · ' + fmtDist(route.dist);
+  }
+  function maybeRoute(force) {
+    if (demo || !s.dest || !fix || routeBusy) return;
+    const now = Date.now();
+    if (!force && now - routeAt < 60000) return;
+    const straight = dist(fix, s.dest);
+    if (straight < 80) { route = { arrived: true }; renderEta(); return; }
+    routeBusy = true;
+    routeAt = now;
+    const want = s.dest;
+    fetch('https://router.project-osrm.org/route/v1/driving/' + fix.lon.toFixed(5) + ',' + fix.lat.toFixed(5) + ';' + want.lon.toFixed(5) + ',' + want.lat.toFixed(5) + '?overview=false')
+      .then((r) => { if (!r.ok) throw new Error('route ' + r.status); return r.json(); })
+      .then((j) => {
+        const r = j && j.routes && j.routes[0];
+        if (!j || j.code !== 'Ok' || !r || !finite(r.duration) || !finite(r.distance)) throw new Error('no route');
+        if (s.dest === want) route = { dur: r.duration, dist: r.distance, at: Date.now(), approx: false };
+      })
+      .catch(() => {
+        /* no road route: estimate from straight-line distance, marked with ≈ */
+        const v = Math.max(speed || 0, 11);
+        if (s.dest === want) route = { dur: (straight * 1.35) / v, dist: straight * 1.35, at: Date.now(), approx: true };
+      })
+      .finally(() => { routeBusy = false; renderEta(); });
+  }
+
+  /* ---------- location ---------- */
+  function onPos(pos) {
+    const c = pos.coords;
+    if (!c || !finite(c.latitude) || !finite(c.longitude)) return;
+    const now = Date.now();
+    const cur = { lat: c.latitude, lon: c.longitude, t: now, acc: finite(c.accuracy) ? c.accuracy : 50 };
+    let v = finite(c.speed) && c.speed >= 0 ? c.speed : null;
+    let h = finite(c.heading) ? c.heading : null;
+    if (prev) {
+      const dt = (cur.t - prev.t) / 1000;
+      if (dt >= 0.9) {
+        const d = dist(prev, cur);
+        if (dt < 20) {
+          /* no speed from the phone: work it out from two fixes, ignoring GPS jitter */
+          if (v === null) {
+            v = d < Math.max(4, cur.acc * 0.5) ? 0 : d / dt;
+            if (v > 90) v = null; /* a position jump, not a speed */
+          }
+          if (h === null && d >= 6) h = bearing(prev, cur);
+        }
+        prev = cur;
+      }
+    } else prev = cur;
+    fix = cur;
+    fixAt = now;
+    geoState = 'ok';
+    if (v !== null) speed = speed === null ? v : speed + (v - speed) * 0.6;
+    if (h !== null && (v === null || v > 1.5)) { course = h; courseAt = now; }
+    renderSpeed(); renderHeading(); renderNote();
+    maybeWeather(); maybeRoute(false);
+  }
+  function onGeoError(err) {
+    if (err && err.code === 1) {
+      geoState = 'denied';
+      if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+      s.started = false; save();
+      if (screen === 'hud') { show('start'); $('startMsg').textContent = 'Location is off. Allow it for this app, then start again.'; }
+    } else if (geoState !== 'ok') geoState = 'waiting';
+    renderSpeed(); renderNote();
+  }
+  let wake = null;
+  function keepAwake() {
+    if (!navigator.wakeLock || wake) return;
+    navigator.wakeLock.request('screen').then((w) => {
+      wake = w;
+      w.addEventListener('release', () => { wake = null; });
+    }).catch(() => { /* the display follows its own timeout */ });
+  }
+  function startDrive(fromTap) {
+    demo = false;
+    $('startMsg').textContent = '';
+    if (!navigator.geolocation) { geoState = 'none'; $('startMsg').textContent = 'This device has no location.'; return; }
+    geoState = 'waiting';
+    if (watchId === null) watchId = navigator.geolocation.watchPosition(onPos, onGeoError, { enableHighAccuracy: true });
+    if (fromTap) askSensors();
+    keepAwake();
+    s.started = true; save();
+    show('hud');
+    renderAll();
+  }
+  function startDemo() {
+    demo = true;
+    const t0 = Date.now();
+    wx = { temp: 18, code: 2, day: true };
+    route = { dur: 18 * 60, dist: 15100, at: t0, approx: false };
+    geoState = 'ok';
+    show('hud');
+    const step = () => {
+      const t = (Date.now() - t0) / 1000;
+      speed = Math.max(0, 17 + 12 * Math.sin(t / 5));
+      course = (48 + t * 7) % 360;
+      courseAt = fixAt = Date.now();
+      renderSpeed(); renderHeading();
+    };
+    step();
+    setInterval(step, 250);
+    renderAll();
+  }
+
+  /* ---------- screens ---------- */
+  let screen = 'start';
+  let pushed = false;
+  function show(name) {
+    screen = name;
+    $('start').hidden = name !== 'start';
+    $('hud').hidden = name !== 'hud';
+    $('trip').hidden = name !== 'trip';
+  }
+  function openTrip() {
+    try { history.pushState({ screen: 'trip' }, ''); pushed = true; } catch (err) { pushed = false; }
+    show('trip');
+    renderTrip();
+    try { $('dest').focus({ preventScroll: true }); } catch (err) { /* focus is a nicety */ }
+  }
+  function closeTrip() {
+    if (pushed) { pushed = false; history.back(); }
+    show('hud');
+    renderAll();
+  }
+  window.addEventListener('popstate', () => { pushed = false; if (screen === 'trip') { show('hud'); renderAll(); } });
+
+  function placeButton(p, extra) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'place';
+    b.textContent = p.name;
+    const line = [p.where, extra].filter(Boolean).join(' · ');
+    if (line) { const sp = document.createElement('span'); sp.textContent = line; b.appendChild(sp); }
+    b.addEventListener('click', () => choose(p));
+    return b;
+  }
+  function renderTrip() {
+    $('btnUnits').textContent = s.units === 'us' ? 'Units: mph and °F. Switch to km/h and °C' : 'Units: km/h and °C. Switch to mph and °F';
+    $('btnClear').hidden = !s.dest;
+    if (s.dest) $('btnClear').textContent = 'End trip to ' + s.dest.name;
+    const box = $('recents');
+    box.textContent = '';
+    s.recents.forEach((p) => box.appendChild(placeButton(p, fix ? fmtDist(dist(fix, p)) : '')));
+    $('recentsHead').hidden = s.recents.length === 0;
+  }
+  function choose(p) {
+    s.dest = { name: p.name, where: p.where || '', lat: p.lat, lon: p.lon };
+    s.recents = [s.dest].concat(s.recents.filter((r) => !(r.name === p.name && dist(r, p) < 100))).slice(0, 4);
+    save();
+    route = null; routeAt = 0;
+    $('results').textContent = '';
+    $('tripMsg').textContent = '';
+    $('dest').value = '';
+    closeTrip();
+    maybeRoute(true);
+    renderEta();
+  }
+  let searchSeq = 0;
+  let lastQuery = '';
+  let lastQueryAt = 0;
+  function search() {
+    const q = $('dest').value.trim();
+    const box = $('results');
+    if (q.length < 2) { $('tripMsg').textContent = 'Write or say a place name first.'; return; }
+    if (q === lastQuery && Date.now() - lastQueryAt < 3000) return;
+    lastQuery = q;
+    lastQueryAt = Date.now();
+    const seq = ++searchSeq;
+    box.textContent = '';
+    $('tripMsg').textContent = 'Searching…';
+    let url = 'https://photon.komoot.io/api/?limit=4&lang=en&q=' + encodeURIComponent(q);
+    if (fix) url += '&lat=' + fix.lat.toFixed(3) + '&lon=' + fix.lon.toFixed(3);
+    fetch(url)
+      .then((r) => { if (!r.ok) throw new Error('search ' + r.status); return r.json(); })
+      .then((j) => {
+        if (seq !== searchSeq) return;
+        const found = (j && Array.isArray(j.features) ? j.features : []).map((f) => {
+          const pr = (f && f.properties) || {};
+          const co = f && f.geometry && f.geometry.coordinates;
+          if (!Array.isArray(co) || !finite(co[0]) || !finite(co[1])) return null;
+          const street = [pr.housenumber, pr.street].filter(Boolean).join(' ');
+          const name = String(pr.name || street || pr.city || '').slice(0, 60);
+          if (!name) return null;
+          const where = [pr.name && street ? street : '', pr.city || pr.county || '', pr.state || pr.country || '']
+            .filter(Boolean).join(', ').slice(0, 80);
+          return { name, where, lat: co[1], lon: co[0] };
+        }).filter(Boolean);
+        if (!found.length) { $('tripMsg').textContent = 'No places found. Try a shorter name.'; return; }
+        $('tripMsg').textContent = 'Pick one.';
+        found.forEach((p) => box.appendChild(placeButton(p, fix ? fmtDist(dist(fix, p)) : '')));
+      })
+      .catch(() => { if (seq === searchSeq) $('tripMsg').textContent = 'Search failed. Check the phone connection.'; });
+  }
+
+  /* ---------- clock and upkeep ---------- */
+  let lastMinute = -1;
+  function renderClock() {
+    const d = new Date();
+    if (d.getMinutes() === lastMinute) return;
+    lastMinute = d.getMinutes();
+    setTime($('clock'), d, '');
+    try { $('clockDay').textContent = d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }); }
+    catch (err) { $('clockDay').textContent = 'Today'; }
+  }
+  function renderAll() {
+    renderSpeed(); renderHeading(); renderNote(); renderWeather(); renderEta();
+    lastMinute = -1; renderClock();
+  }
+  setInterval(() => {
+    renderClock();
+    if (screen !== 'hud') return;
+    renderSpeed(); renderHeading(); renderNote(); renderEta();
+    maybeWeather(); maybeRoute(false);
+  }, 1000);
+
+  /* ---------- wiring ---------- */
+  $('btnStart').addEventListener('click', () => startDrive(true));
+  $('btnDemo').addEventListener('click', startDemo);
+  $('etaBtn').addEventListener('click', () => { askSensors(); openTrip(); });
+  $('btnFind').addEventListener('click', search);
+  $('dest').addEventListener('change', search);
+  $('dest').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); search(); } });
+  $('btnBack').addEventListener('click', closeTrip);
+  $('btnClear').addEventListener('click', () => { s.dest = null; route = null; save(); closeTrip(); });
+  $('btnUnits').addEventListener('click', () => { s.units = s.units === 'us' ? 'metric' : 'us'; save(); renderTrip(); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && screen !== 'start') keepAwake(); });
+
+  /* desktop preview only: arrow keys step through controls when the browser has not already */
+  document.addEventListener('keydown', (e) => {
+    const fwd = e.key === 'ArrowDown' || e.key === 'ArrowRight';
+    const back = e.key === 'ArrowUp' || e.key === 'ArrowLeft';
+    if ((!fwd && !back) || (e.target && e.target.tagName === 'INPUT' && (e.key === 'ArrowLeft' || e.key === 'ArrowRight'))) return;
+    const before = document.activeElement;
+    requestAnimationFrame(() => {
+      if (document.activeElement !== before) return;
+      const list = Array.from(document.querySelectorAll('section:not([hidden]) button, section:not([hidden]) input')).filter((el) => !el.hidden);
+      if (!list.length) return;
+      const i = list.indexOf(before);
+      list[i < 0 ? 0 : Math.min(list.length - 1, Math.max(0, i + (fwd ? 1 : -1)))].focus();
+    });
+  });
+
+  renderAll();
+  if (window.location.hash === '#demo') startDemo();
+  else if (s.started) startDrive(false);
+  else { try { $('btnStart').focus({ preventScroll: true }); } catch (err) { /* focus is a nicety */ } }
+})();
+</script>
+
+</body>
+</html>
