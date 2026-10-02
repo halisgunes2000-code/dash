@@ -407,7 +407,8 @@
   function onOrientation(e) {
     let h = null;
     if (finite(e.webkitCompassHeading)) h = e.webkitCompassHeading;
-    else if (e.absolute === true && finite(e.alpha)) h = (360 - e.alpha) % 360;
+    /* on the glasses alpha already counts clockwise from north, so it is the heading as is */
+    else if (e.absolute === true && finite(e.alpha)) h = ((e.alpha % 360) + 360) % 360;
     if (h === null) return;
     sensorHeading = h;
     sensorAt = Date.now();
